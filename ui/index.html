@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BAIT - Let's Analyse It</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #1e1e1e;
+            font-family: Arial, sans-serif;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        .logo {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .logo img {
+            width: 250px;
+        }
+        .chat-container {
+            display: flex;
+            align-items: center;
+            background-color: #2a2a2a;
+            padding: 10px 15px;
+            border-radius: 50px;
+            width: 80%;
+            max-width: 600px;
+            position: fixed;
+            bottom: 40px;
+        }
+        .chat-container input {
+            flex: 1;
+            background: none;
+            border: none;
+            color: white;
+            font-size: 16px;
+            outline: none;
+        }
+        .chat-container button {
+            background-color: #d4a017; /* Same yellow as dot */
+            border: none;
+            color: white;
+            padding: 10px 16px;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 18px;
+        }
+        .chat-container button:hover {
+            background-color: #c49012;
+        }
+        .chat-box {
+            width: 80%;
+            max-width: 600px;
+            background: #2a2a2a;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 80px;
+            overflow-y: auto;
+            max-height: 60vh;
+        }
+        .message {
+            margin: 10px 0;
+        }
+        .user {
+            color: #d4a017;
+        }
+        .bot {
+            color: #ffffff;
+        }
+    </style>
+</head>
+<body>
+    <div class="logo">
+        <img src="bait_logo.png" alt="BAIT Logo">
+    </div>
+
+    <div class="chat-box" id="chat-box">
+        <div class="message bot">Hello! Let's Analyse It.</div>
+    </div>
+
+    <div class="chat-container">
+        <input type="text" id="user-input" placeholder="Ask anything..." />
+        <button onclick="sendMessage()">&#9658;</button>
+    </div>
+
+    <script>
+        async function sendMessage() {
+            const input = document.getElementById("user-input");
+            const chatBox = document.getElementById("chat-box");
+            const message = input.value.trim();
+
+            if (message === "") return;
+
+            // Add user message
+            const userMsg = document.createElement("div");
+            userMsg.classList.add("message", "user");
+            userMsg.textContent = message;
+            chatBox.appendChild(userMsg);
+
+            input.value = "";
+
+            // Send to backend
+            try {
+                const response = await fetch("http://127.0.0.1:8000/query", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({ user_query: message }),
+                });
+
+                const data = await response.json();
+                const botMsg = document.createElement("div");
+                botMsg.classList.add("message", "bot");
+                botMsg.textContent = data.answer || JSON.stringify(data.results);
+                chatBox.appendChild(botMsg);
+            } catch (error) {
+                const errorMsg = document.createElement("div");
+                errorMsg.classList.add("message", "bot");
+                errorMsg.textContent = "Error connecting to server.";
+                chatBox.appendChild(errorMsg);
+            }
+
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+    </script>
+</body>
+</html>
