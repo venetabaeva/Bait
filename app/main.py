@@ -25,3 +25,7 @@ async def chat(request: Request):
         return JSONResponse({"response": response})
     except Exception as e:
         return JSONResponse({"response": f"Error: {str(e)}"})
+
+If __name__=="__main__":
+	import unvicorn
+	unvicorn.run(app, host="0.0.0.0", port=8000)
