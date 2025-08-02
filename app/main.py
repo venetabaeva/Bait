@@ -26,6 +26,9 @@ async def chat(request: Request):
     except Exception as e:
         return JSONResponse({"response": f"Error: {str(e)}"})
 
-if __name__=="__main__":
-	import unvicorn
-	unvicorn.run(app, host="0.0.0.0", port=8000)
+if __name__ == "__main__":
+    import uvicorn
+    import os
+
+    port = int(os.environ.get("PORT", 8000))  # Railway sets PORT automatically
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
