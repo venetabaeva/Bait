@@ -1,37 +1,50 @@
-import os
-import json
-from openai import OpenAI
+import os, json
 from dotenv import load_dotenv
+from openai import OpenAI
+from app.query_engine import BAUniversalQueryEngine
 
-# Load environment variables
 load_dotenv()
 
-def interpret_query(user_input, factors):
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# пътят ти според снимките
+MASTER_PATH = "app/data/master_table.csv"
 
-    prompt = f"""
-    Use GPT to map a user query to factor filters.
-    Expected output: {{"Persona": "Sponsor", "Condition": "High risk"}}
+engine = BAUniversalQueryEngine(MASTER_PATH)
+FACTORS = engine.get_all_factors()
 
-    You are a BA Advisor Agent. The possible factors are: {', '.join(factors)}.
-    User query: "{user_input}"
-    Identify which factor values this query is referring to.
-    Respond with a valid JSON object (e.g., {{"Persona": "Sponsor"}}).
-    If unsure, respond with {{}}.
-    """
+def interpret_query(user_input: str) -> str:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return "Server misconfigured: missing OPENAI_API_KEY."
+
+    client = OpenAI(api_key=api_key)
+
+    prompt = (
+        "You are a BA Advisor Agent. The master table has the following factor columns: "
+        + ", ".join(FACTORS)
+        + ".\nUser query: " + user_input + "\n"
+        "Return ONLY a JSON object of factor->value pairs inferred from the user query. "
+        "If unsure, return {}."
+    )
 
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o",
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
             messages=[{"role": "system", "content": prompt}],
-            max_tokens=200
+            max_tokens=200,
         )
-        result_text = response.choices[0].message.content.strip()
-
+        text = resp.choices[0].message.content.strip()
+        # опит за JSON
         try:
-            return json.loads(result_text)
+            filters = json.loads(text)
+            if not isinstance(filters, dict):
+                filters = {}
         except json.JSONDecodeError:
-            return {"error": f"Invalid JSON returned: {result_text}"}
+            filters = {}
 
+        df = engine.query(**filters)
+        if df.empty:
+            return "No relevant matches found."
+
+        return df.to_string(index=False)
     except Exception as e:
-        return {"error": str(e)}
+        return f"LLM error: {e}"
