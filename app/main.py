@@ -10,7 +10,7 @@ app.mount("/static", StaticFiles(directory="ui/static"), name="static")
 
 @app.get("/")
 def home():
-    return FileResponse(os.path.join("ui", "index.html"))
+    return FileResponse(os.path.join("ui","index.html"))
 
 @app.post("/chat")
 async def chat(request: Request):
