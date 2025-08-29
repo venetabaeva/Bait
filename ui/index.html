@@ -117,6 +117,10 @@
           body: JSON.stringify({ message: userMessage })
         });
         const data = await response.json();
+	let reply = data.response;
+        If (typeof reply === "object") {
+		reply = JSON.stringify(reply, null, 2);
+}
         appendMessage(data.response || "No response from server", "bot");
       } catch (error) {
         appendMessage("Error connecting to server.", "bot");
