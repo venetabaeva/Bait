@@ -1,14 +1,15 @@
+import os
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-import os
 
-from app.llm_interpreter import interpret_query
+# your interpreter (must exist at app/llm_interpreter.py)
+from .llm_interpreter import interpret_query
 
-app = FastAPI()
+app = FastAPI(title="BAIT")
 
-# позволи заявките от браузъра
+# allow browser requests (Render + local)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,27 +17,40 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# статични файлове: /static → ui/static
+# serve /static/* from ui/static (logo, css, etc.)
 app.mount("/static", StaticFiles(directory="ui/static"), name="static")
 
-# начална страница
+
+@app.get("/health")
+def health():
+    return PlainTextResponse("ok")
+
+
+# serve the UI
 @app.get("/")
-def home():
+def serve_homepage():
     return FileResponse(os.path.join("ui", "index.html"))
 
-# чат API
-@app.post("/chat")
-async def chat(req: Request):
-    try:
-        data = await req.json()
-        user_msg = data.get("message", "").strip()
-        reply = interpret_query(user_msg)
-        return JSONResponse({"response": reply})
-    except Exception as e:
-        # не печатай CSV/дебъг в отговора
-        return JSONResponse({"response": f"Server error: {str(e)}"}, status_code=500)
 
-if __name__ == "__main__":
-    import os
+# chat endpoint
+@app.post("/chat")
+async def chat(request: Request):
+    data = await request.json()
+    msg = (data.get("message") or "").strip()
+    debug = bool(data.get("debug")) or ("debug" in request.query_params)
+
+    try:
+        result = interpret_query(msg)  # returns dict with keys: answer, factors, matched_count, ...
+        if debug:
+            return JSONResponse(result)
+        return JSONResponse({"response": result.get("answer", "")})
+    except Exception as e:
+        # surface error but keep 500 for visibility in Render logs
+        return JSONResponse({"response": f"Error: {str(e)}"}, status_code=500)
+
+
+if _name_ == "_main_":
     import uvicorn
-    uvicorn.run("app.main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+
+    port = int(os.environ.get("PORT", 8000))  # Render sets PORT
+    uvicorn.run("app.main:app", host="0.0.0.0", port=port)

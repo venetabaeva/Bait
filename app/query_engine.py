@@ -1,58 +1,40 @@
 import pandas as pd
+import re
 
 class BAUniversalQueryEngine:
     def __init__(self, master_table_path: str):
         self.df = pd.read_csv(master_table_path).fillna("")
+        # normalize convenience columns for robust matching
+        self.norm = self.df.copy()
+        for c in self.norm.columns:
+            if self.norm[c].dtype == object:
+                self.norm[c] = self.norm[c].astype(str).str.strip().str.lower()
 
     def get_all_factors(self):
-        # фактори = имената на колоните
+        # columns available in the table
         return list(self.df.columns)
 
-    def query(self, **kwargs):
+    def query_contains(self, **kwargs):
         """
-        Филтрира таблицата по подадени фактори (case-insensitive).
-        Пример: query(Activity="Plan Business Analysis", Persona="Sponsor")
+        Flexible case-insensitive 'contains' matching on provided columns.
+        Example: query_contains(Activity="stakeholder conflict")
         """
-        result = self.df.copy()
-        for key, val in kwargs.items():
-            if key in result.columns and val:
-                result = result[result[key].astype(str).str.lower() == str(val).lower()]
-        return result
+        if not kwargs:
+            return self.df.head(0)
 
-    def summarize_rows(self, rows: pd.DataFrame) -> str:
-        """
-        Прави човешко резюме на подбраните редове.
-        Опитва се да използва често срещани колони; ако ги няма — събира стойности по редове.
-        """
-        if rows.empty:
-            return "No exact rule match in the master table. I’ll still reason based on the closest factors."
+        mask = None
+        for col, val in kwargs.items():
+            if col not in self.norm.columns or not isinstance(val, str):
+                continue
+            v = val.strip().lower()
+            if not v:
+                continue
+            # word-boundary-ish contains (fallback to simple contains)
+            pattern = re.escape(v)
+            colmask = self.norm[col].str.contains(pattern, na=False, regex=True)
+            mask = colmask if mask is None else (mask & colmask)
 
-        parts = []
+        if mask is None:
+            return self.df.head(0)
 
-        # Първо — ако има колони с указания/действия
-        for col in ["Recommended actions", "Actions", "Advice", "Guidance"]:
-            if col in rows.columns:
-                uniq = [x for x in rows[col].astype(str).unique() if x]
-                if uniq:
-                    parts.append("Recommended actions:\n- " + "\n- ".join(uniq))
-                    break
-
-        # Добавим контекст, ако има
-        for col in ["Rationale", "Outcome", "Notes", "Considerations"]:
-            if col in rows.columns:
-                uniq = [x for x in rows[col].astype(str).unique() if x]
-                if uniq:
-                    parts.append(f"{col}:\n- " + "\n- ".join(uniq))
-
-        if not parts:
-            # Generic fallback: изредете уникални стойности по няколко ключови колони
-            sample_cols = rows.columns[:6]
-            lines = []
-            for _, r in rows.iterrows():
-                items = [f"{c}: {str(r[c]).strip()}" for c in sample_cols if str(r[c]).strip()]
-                if items:
-                    lines.append("• " + " | ".join(items))
-            if lines:
-                parts.append("\n".join(lines))
-
-        return "\n\n".join(parts)
+        return self.df[mask]
