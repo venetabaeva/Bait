@@ -1,50 +1,69 @@
 import os, json
-from dotenv import load_dotenv
 from openai import OpenAI
 from app.query_engine import BAUniversalQueryEngine
 
-load_dotenv()
-
-# пътят ти според снимките
-MASTER_PATH = "app/data/master_table.csv"
-
-engine = BAUniversalQueryEngine(MASTER_PATH)
-FACTORS = engine.get_all_factors()
+# зареди таблицата
+ENGINE = BAUniversalQueryEngine(master_table_path="app/data/master_table.csv")
 
 def interpret_query(user_input: str) -> str:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        return "Server misconfigured: missing OPENAI_API_KEY."
+    if not user_input:
+        return "Please enter a question or description."
 
-    client = OpenAI(api_key=api_key)
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    factors = ENGINE.get_all_factors()
 
-    prompt = (
-        "You are a BA Advisor Agent. The master table has the following factor columns: "
-        + ", ".join(FACTORS)
-        + ".\nUser query: " + user_input + "\n"
-        "Return ONLY a JSON object of factor->value pairs inferred from the user query. "
-        "If unsure, return {}."
+    sys_prompt = f"""
+You are a Business Analysis assistant.
+Map the user's message to the most relevant factor values from this list of columns (factors):
+{factors}
+
+Return ONLY a compact JSON object where keys are factor/column names and values are the chosen values.
+If unsure about a factor, omit it. Example: {{"Persona": "Sponsor", "Condition": "High risk"}}
+Do NOT add explanations outside JSON.
+"""
+
+    # 1) LLM → JSON мапинг фактори
+    resp = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role":"system","content":sys_prompt},
+            {"role":"user","content":user_input}
+        ],
+        max_tokens=300
     )
 
+    raw = resp.choices[0].message.content.strip()
     try:
-        resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "system", "content": prompt}],
-            max_tokens=200,
-        )
-        text = resp.choices[0].message.content.strip()
-        # опит за JSON
-        try:
-            filters = json.loads(text)
-            if not isinstance(filters, dict):
-                filters = {}
-        except json.JSONDecodeError:
-            filters = {}
+        mapping = json.loads(raw)
+        if not isinstance(mapping, dict):
+            mapping = {}
+    except Exception:
+        mapping = {}  # ако не е валиден JSON — продължаваме с reasoning без твърдо филтриране
 
-        df = engine.query(**filters)
-        if df.empty:
-            return "No relevant matches found."
+    # 2) филтриране на master-а
+    rows = ENGINE.query(**mapping)
 
-        return df.to_string(index=False)
-    except Exception as e:
-        return f"LLM error: {e}"
+    # 3) човешко резюме на правилата/насоките
+    summary = ENGINE.summarize_rows(rows)
+
+    # 4) финален отговор (малко reasoning + summary)
+    final_prompt = f"""
+User input: {user_input}
+Mapped factors: {json.dumps(mapping, ensure_ascii=False)}
+
+Master table summary (for the mapped subset):
+{summary}
+
+Write a concise, human response (5–10 sentences). Give practical recommendations.
+Do not list the whole table. If no exact match exists, reason from the closest factors.
+End with 2–3 bullet points of next actions.
+"""
+    final = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role":"system","content":"You are a senior BA advisor."},
+                  {"role":"user","content":final_prompt}],
+        max_tokens=350,
+        temperature=0.4,
+    ).choices[0].message.content.strip()
+
+    return final

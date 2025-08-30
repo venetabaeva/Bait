@@ -8,34 +8,34 @@ from app.llm_interpreter import interpret_query
 
 app = FastAPI()
 
-# Разрешаваме заявки от браузъра (CORS)
+# позволи заявките от браузъра
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # може да сложиш и конкретен домейн вместо "*"
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Статични файлове (CSS, JS, картинки и т.н.)
+# статични файлове: /static → ui/static
 app.mount("/static", StaticFiles(directory="ui/static"), name="static")
 
-# Главната страница
+# начална страница
 @app.get("/")
 def home():
     return FileResponse(os.path.join("ui", "index.html"))
 
-# Чат ендпойнт
+# чат API
 @app.post("/chat")
-async def chat(request: Request):
-    data = await request.json()
-    msg = data.get("message", "")
+async def chat(req: Request):
     try:
-        reply = interpret_query(msg)
+        data = await req.json()
+        user_msg = data.get("message", "").strip()
+        reply = interpret_query(user_msg)
         return JSONResponse({"response": reply})
     except Exception as e:
-        return JSONResponse({"response": f"Error: {e}"}, status_code=500)
+        # не печатай CSV/дебъг в отговора
+        return JSONResponse({"response": f"Server error: {str(e)}"}, status_code=500)
 
-# Стартиране на uvicorn
-if __name__ == "__main__":
+if _name_ == "_main_":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
