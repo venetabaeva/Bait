@@ -36,6 +36,7 @@ async def chat(req: Request):
         # не печатай CSV/дебъг в отговора
         return JSONResponse({"response": f"Server error: {str(e)}"}, status_code=500)
 
-if _name_ == "_main_":
+if __name__ == "__main__":
+    import os
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    uvicorn.run("app.main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
