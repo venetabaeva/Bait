@@ -3,7 +3,7 @@ import os, json
 from openai import OpenAI
 from .query_engine import BAUniversalQueryEngine
 
-DATA_PATH = os.path.join(os.path.dirname(_file_), "data", "master_table.csv")
+DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "master_table.csv")
 engine = BAUniversalQueryEngine(DATA_PATH)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
