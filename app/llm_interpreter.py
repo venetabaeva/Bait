@@ -1,117 +1,106 @@
 import os
 import json
-from typing import List, Dict, Tuple
+from typing import List, Dict, Deque, Tuple
+from collections import deque
 
 import pandas as pd
-from dotenv import load_dotenv
 from openai import OpenAI
+from dotenv import load_dotenv
 
-# зареди .env (ако има локално)
+# === Път до master таблицата (остави така) ===
+DATA_PATH = os.path.join(os.path.dirname(_file_), "data", "master_table.csv")
+
+# === Настройки за история/контекст на чата (в рамките на една сесия) ===
+MAX_TURNS = 6  # колко последни потребител/бот реплики да пазим
+
+# === Зареждане на API ключа ===
 load_dotenv()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Модел – можеш да смениш при нужда
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+# Модел
+OPENAI_MODEL = "gpt-4o-mini"
 
-# --------- Помощни функции върху таблицата ---------
+# ------------------ Помощни функции върху таблицата ------------------
 
-def load_table(data_path: str) -> pd.DataFrame:
-    """
-    Чете master CSV и нормализира празните клетки.
-    """
-    if not os.path.isabs(data_path):
-        # направи пътя относителен спрямо текущия файл
-        data_path = os.path.join(os.path.dirname(_file_), data_path)
-
-    if not os.path.exists(data_path):
-        raise FileNotFoundError(f"Master table not found at: {data_path}")
-
-    df = pd.read_csv(data_path)
-    # нормализирай празнини и типове
-    for col in df.columns:
-        df[col] = df[col].fillna("").astype(str)
+def load_table(path: str) -> pd.DataFrame:
+    df = pd.read_csv(path)
+    df = df.fillna("")
     return df
 
-
-def _row_text(df: pd.DataFrame, i: int) -> str:
+def top_n_matches(df: pd.DataFrame, user_text: str, top_n: int = 5) -> List[Dict[str, str]]:
     """
-    Сглоби индекс i на df в един ред текст (всички колони).
+    Много прост матчер: търси по колони Activity, Stakeholders, ExpectedActions, NextSteps, Risks, Mitigations
+    и връща топ N реда, които имат най-много съвпадащи думи (casual match).
     """
-    row = df.iloc[i]
-    # всички колони като "ColName: value"
-    parts = []
-    for col in df.columns:
-        val = str(row[col]).strip()
-        if val:
-            parts.append(f"{col}: {val}")
-    return " | ".join(parts)
+    cols = [c for c in df.columns if c.lower() in {
+        "activity", "stakeholders", "expectedactions", "nextsteps", "risks", "mitigations"
+    }]
+    if not cols:
+        cols = list(df.columns)
 
+    user_tokens = set(t.lower() for t in user_text.split())
+    scored: List[Tuple[int, Dict[str, str]]] = []
 
-def _simple_overlap_score(query: str, text: str) -> int:
+    for _, row in df.iterrows():
+        text = " ".join(str(row[c]) for c in cols)
+        row_tokens = set(t.lower() for t in text.split())
+        score = len(user_tokens & row_tokens)
+        scored.append((score, {c: str(row[c]) for c in df.columns}))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [r for _, r in scored[:top_n]]
+
+def compress_rows(rows: List[Dict[str, str]], lang: str) -> str:
     """
-    Много проста метрика: брои съвпадения на думи (case-insensitive).
-    Не е перфектна, но работи стабилно без външни зависимости.
+    Прави кратък „facts blob“ за LLM — само фактологията от таблицата.
     """
-    q_tokens = {t for t in query.lower().split() if len(t) > 2}
-    t_tokens = {t for t in text.lower().split() if len(t) > 2}
-    return len(q_tokens & t_tokens)
-
-
-def find_top_matches(user_input: str, df: pd.DataFrame, top_n: int = 5) -> List[Tuple[int, int]]:
-    """
-    Връща списък от (index, score) за top_n най-близки редове.
-    """
-    scores: List[Tuple[int, int]] = []
-    for i in range(len(df)):
-        txt = _row_text(df, i)
-        score = _simple_overlap_score(user_input, txt)
-        if score > 0:
-            scores.append((i, score))
-    scores.sort(key=lambda x: x[1], reverse=True)
-    return scores[:top_n]
-
-
-def compress_rows(df: pd.DataFrame, matches: List[Tuple[int, int]], lang: str) -> str:
-    """
-    Прави кратък „контекст“ от най-подходящите редове, в удобен за LLM вид.
-    """
-    if not matches:
-        return ""
-
     lines = []
-    for idx, sc in matches:
-        row = df.iloc[idx].to_dict()
-        # По-четим формат
-        block = []
-        for k, v in row.items():
-            v = (v or "").strip()
-            if v:
-                block.append(f"- {k}: {v}")
-        lines.append("\n".join(block))
+    for r in rows:
+        if lang.startswith("bg"):
+            lines.append(
+                f"* Дейност: {r.get('Activity','')}\n"
+                f"  - Заинтересовани: {r.get('Stakeholders','')}\n"
+                f"  - Очаквани действия: {r.get('ExpectedActions','')}\n"
+                f"  - Следващи стъпки: {r.get('NextSteps','')}\n"
+                f"  - Рискове: {r.get('Risks','')}\n"
+                f"  - Митигиране: {r.get('Mitigations','')}\n"
+            )
+        else:
+            lines.append(
+                f"* Activity: {r.get('Activity','')}\n"
+                f"  - Stakeholders: {r.get('Stakeholders','')}\n"
+                f"  - Expected actions: {r.get('ExpectedActions','')}\n"
+                f"  - Next steps: {r.get('NextSteps','')}\n"
+                f"  - Risks: {r.get('Risks','')}\n"
+                f"  - Mitigations: {r.get('Mitigations','')}\n"
+            )
+    blob = "\n".join(lines)
+    # ограничаваме дължината
+    return blob[:3000]
 
-    blob = "\n\n---\n\n".join(lines)
-    return blob
-
+# ------------------ System prompt (БЕЗ уточняващи въпроси) ------------------
 
 def system_prompt(lang: str, rules_blob: str) -> str:
     """
-    Инструкции към модела – отговаряй само по предоставените правила.
+    Инструкции към модела: отговаряй директно, човешки, без да задаваш въпроси за уточняване.
+    Базиран единствено на предоставените правила (таблични факти).
     """
-    # език: "bg" или "en" – не е критично; използваме като hint
     lang_hint = "Bulgarian" if (lang or "").lower().startswith("bg") else "English"
-
     return f"""
 You are BAIT Advisor.
-Answer strictly based ONLY on the factual content under 'RULES'.
+
+Answer STRICTLY and ONLY based on the factual content under 'RULES'.
 Do NOT invent stakeholders, actions, or details that are not present in the rules.
 Write a fluent, natural, human-style answer in {lang_hint}.
-If the rules do not contain enough info, say briefly what is missing and ask 1–2 clarifying questions.
+Never ask the user clarifying questions. Even if the input is vague, provide your best direct guidance relying only on the rules.
+If something is missing in the rules and truly blocks a concrete step, state the gap briefly and still provide next steps that are justified by the rules.
 
 RULES (tabular facts, already extracted):
 {rules_blob}
 """.strip()
 
-
-# --------- Главна функция, която вика LLM ---------
+# ------------------ Главна функция, извиквана от бекенда ------------------
 
 def interpret_query(
     user_input: str,
@@ -120,43 +109,42 @@ def interpret_query(
     data_path: str | None = None,
 ) -> str:
     """
-    1) Зарежда таблицата.
-    2) Намира най-близките редове.
-    3) Сглобява „правила“ за LLM.
-    4) Моли модела да формулира човешки отговор без да измисля факти.
+    Намира релевантни редове от таблицата и генерира директен човешки отговор, БЕЗ уточняващи въпроси.
     """
-    # 1) път към master_table.csv (относително към файла)
-    if data_path is None:
-        data_path = os.path.join(os.path.dirname(_file_), "data", "master_table.csv")
-    elif not os.path.isabs(data_path):
-        data_path = os.path.join(os.path.dirname(_file_), data_path)
+    # 1) Зареждаме таблицата
+    path = data_path or DATA_PATH
+    df = load_table(path)
 
-    df = load_table(data_path)
+    # 2) Търсим най-релевантни редове
+    matches = top_n_matches(df, user_input, top_n=5)
+    rules = compress_rows(matches, lang or "bg")
 
-    # 2) топ съвпадения
-    matches = find_top_matches(user_input, df, top_n=5)
-    rules_blob = compress_rows(df, matches, lang)
+    # 3) Сглобяваме съобщения за модела (история + система + потребител)
+    sys_text = system_prompt(lang or "bg", rules)
+    msgs: List[Dict[str, str]] = [{"role": "system", "content": sys_text}]
 
-    # 3) системен prompt
-    sys_txt = system_prompt(lang or "bg", rules_blob)
-
-    # 4) история (ако има) + текущ потребителски вход
-    msgs: List[Dict[str, str]] = [{"role": "system", "content": sys_txt}]
+    # добавяме кратка история (ако има)
+    trimmed: Deque[Dict[str, str]] = deque(maxlen=MAX_TURNS)
     if history:
-        # очакваме елементи {"role": "user"/"assistant", "content": "..."}
-        msgs.extend(history[-8:])  # малък контекст
+        for m in history[-MAX_TURNS:]:
+            # пазим само типичните полета role/content
+            if "role" in m and "content" in m:
+                trimmed.append({"role": m["role"], "content": m["content"]})
+    msgs.extend(list(trimmed))
+
+    # текущото потребителско съобщение
     msgs.append({"role": "user", "content": user_input})
 
+    # 4) Извикваме модела (без да му позволяваме да отговаря на друг език)
     try:
-        client = OpenAI()
         resp = client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=msgs,
-            temperature=0.2,   # по-детерминистично
+            temperature=0.2,      # по-детерминирано
             max_tokens=700,
         )
-        text = resp.choices[0].message.content.strip()
-        return text
+        answer = resp.choices[0].message.content.strip()
+        return answer
     except Exception as e:
-        # да върнем кратко, четимо съобщение към UI
+        # безопасна грешка към UI
         return f"LLM error: {e}"

@@ -1,97 +1,62 @@
 import os
-import uuid
-from typing import Dict, Deque
-from collections import deque
-
+from typing import List, Dict
 from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 
-from app.llm_interpreter import interpret_query
+from app.llm_interpreter import interpret_query, DATA_PATH
 
-# -------------------------
-# FastAPI и CORS
-# -------------------------
 app = FastAPI()
+
+# CORS – разрешаваме фронтенда да вика /chat
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # ако знаеш домейна, сложи конкретния URL
+    allow_origins=["*"],  # можеш да ограничиш към твоя домейн
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# статиката от ui/static достъпна на /static
+# статични файлове (логото и index.html)
 app.mount("/static", StaticFiles(directory="ui/static"), name="static")
 
-# -------------------------
-# Проста памет по сесия (в RAM)
-# -------------------------
-# { sid: deque([{"role":"user"/"assistant", "content":"..."}], maxlen=10) }
-SESSIONS: Dict[str, Deque[dict]] = {}
-
-def get_or_create_sid(request: Request) -> str:
-    sid = request.cookies.get("sid")
-    if not sid:
-        sid = str(uuid.uuid4())
-    return sid
-
-# -------------------------
-# Начална страница
-# -------------------------
 @app.get("/")
-def serve_homepage(request: Request):
-    # подаваме cookie ако липсва
-    sid = get_or_create_sid(request)
-    resp = FileResponse(os.path.join("ui", "index.html"))
-    resp.set_cookie("sid", sid, httponly=False, samesite="Lax")
-    return resp
+def serve_homepage():
+    return FileResponse(os.path.join("ui", "index.html"))
 
-# -------------------------
-# Чат endpoint
-# -------------------------
+# Проста памет на сесия (в паметта на процеса)
+CHAT_HISTORY: List[Dict[str, str]] = []
+
+
 @app.post("/chat")
 async def chat(request: Request):
     try:
         data = await request.json()
-        user_message = (data or {}).get("message", "").strip()
-        if not user_message:
-            return JSONResponse({"response": "Празно съобщение."}, status_code=200)
+        user_message: str = data.get("message", "")
+        lang: str = data.get("lang", "bg")
 
-        # вземи/създай sid и историята
-        sid = request.cookies.get("sid") or data.get("session_id")
-        if not sid:
-            sid = get_or_create_sid(request)
+        # добавяме входа в историята
+        CHAT_HISTORY.append({"role": "user", "content": user_message})
 
-        history = SESSIONS.get(sid)
-        if history is None:
-            history = deque(maxlen=10)
-            SESSIONS[sid] = history
-
-        # детекция на език (много проста)
-        def detect_lang(txt: str) -> str:
-            return "bg" if any("\u0400" <= ch <= "\u04FF" for ch in txt) else "en"
-
-        lang = detect_lang(user_message)
-
-        # извикай интерпретатора (LLM + правила от таблицата)
-        reply_text = interpret_query(
+        # извикваме интерпретатора
+        reply = interpret_query(
             user_input=user_message,
-            history=list(history),   # предаваме досегашния контекст
-            lang=lang,               # "bg" или "en"
-            data_path=os.path.join(os.path.dirname(__file__), "data", "master_table.csv"),
+            history=CHAT_HISTORY,
+            lang=lang,
+            data_path=DATA_PATH,  # явен път
         )
 
-        # обнови историята
-        history.append({"role": "user", "content": user_message})
-        history.append({"role": "assistant", "content": reply_text})
+        # добавяме отговора на модела в историята
+        CHAT_HISTORY.append({"role": "assistant", "content": reply})
 
-        # върни резултата и cookie
-        resp = JSONResponse({"response": reply_text})
-        resp.set_cookie("sid", sid, httponly=False, samesite="Lax")
-        return resp
-
+        return JSONResponse({"response": reply})
     except Exception as e:
-        # показваме ясна грешка, за да се вижда в UI
+        # връщаме 500 към UI с кратко съобщение
         return JSONResponse({"response": f"Server error: {e}"}, status_code=500)
+
+
+# Локално стартиране (Render го игнорира, тъй като ползва Procfile)
+if _name_ == "_main_":
+    import uvicorn
+    uvicorn.run("app.main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
