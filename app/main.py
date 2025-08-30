@@ -1,76 +1,97 @@
 import os
 import uuid
+from typing import Dict, Deque
 from collections import deque
-from typing import Deque, Dict, List
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
 
 from app.llm_interpreter import interpret_query
 
-# ---------------------------
-# In-memory сесии: sid -> deque от съобщения (роля/контент)
-# ---------------------------
-MAX_HISTORY = 8  # колко последни реплики пазим
-SESSIONS: Dict[str, Deque[Dict[str, str]]] = {}
-
+# -------------------------
+# FastAPI и CORS
+# -------------------------
 app = FastAPI()
-
-# Разреши фронтенда (работим same-origin, но нека е широко)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # ако знаеш домейна, сложи конкретния URL
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# статична папка и UI
+# статиката от ui/static достъпна на /static
 app.mount("/static", StaticFiles(directory="ui/static"), name="static")
 
-@app.get("/")
-def serve_homepage():
-    return FileResponse(os.path.join("ui", "index.html"))
+# -------------------------
+# Проста памет по сесия (в RAM)
+# -------------------------
+# { sid: deque([{"role":"user"/"assistant", "content":"..."}], maxlen=10) }
+SESSIONS: Dict[str, Deque[dict]] = {}
 
-@app.get("/healthz")
-def health():
-    return {"ok": True}
-
-def _get_or_create_sid(req: Request, resp: Response) -> str:
-    sid = req.cookies.get("sid")
+def get_or_create_sid(request: Request) -> str:
+    sid = request.cookies.get("sid")
     if not sid:
-        sid = uuid.uuid4().hex
-        # cookie 7 дни
-        resp.set_cookie("sid", sid, httponly=False, samesite="lax", max_age=7*24*3600)
-    if sid not in SESSIONS:
-        SESSIONS[sid] = deque(maxlen=MAX_HISTORY)
+        sid = str(uuid.uuid4())
     return sid
 
+# -------------------------
+# Начална страница
+# -------------------------
+@app.get("/")
+def serve_homepage(request: Request):
+    # подаваме cookie ако липсва
+    sid = get_or_create_sid(request)
+    resp = FileResponse(os.path.join("ui", "index.html"))
+    resp.set_cookie("sid", sid, httponly=False, samesite="Lax")
+    return resp
+
+# -------------------------
+# Чат endpoint
+# -------------------------
 @app.post("/chat")
-async def chat(req: Request):
-    body = await req.json()
-    user_msg = (body or {}).get("message", "").strip()
-    if not user_msg:
-        return JSONResponse({"response": "Празно съобщение."}, status_code=200)
-
-    resp = Response(media_type="application/json")
-    sid = _get_or_create_sid(req, resp)
-
-    # вземи текущата история за тази сесия
-    history: Deque[Dict[str, str]] = SESSIONS[sid]
-
+async def chat(request: Request):
     try:
-        answer_text = interpret_query(user_msg, list(history))  # подаваме историята
-        # обнови историята
-        history.append({"role": "user", "content": user_msg})
-        history.append({"role": "assistant", "content": answer_text})
-        return JSONResponse({"response": answer_text})
-    except Exception as e:
-        return JSONResponse({"response": f"Грешка: {e}"}, status_code=500)
+        data = await request.json()
+        user_message = (data or {}).get("message", "").strip()
+        if not user_message:
+            return JSONResponse({"response": "Празно съобщение."}, status_code=200)
 
-# локално стартиране (Render не ползва това)
-if _name_ == "_main_":
-    import uvicorn
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("app.main:app", host="0.0.0.0", port=port, reload=False)
+        # вземи/създай sid и историята
+        sid = request.cookies.get("sid") or data.get("session_id")
+        if not sid:
+            sid = get_or_create_sid(request)
+
+        history = SESSIONS.get(sid)
+        if history is None:
+            history = deque(maxlen=10)
+            SESSIONS[sid] = history
+
+        # детекция на език (много проста)
+        def detect_lang(txt: str) -> str:
+            return "bg" if any("\u0400" <= ch <= "\u04FF" for ch in txt) else "en"
+
+        lang = detect_lang(user_message)
+
+        # извикай интерпретатора (LLM + правила от таблицата)
+        reply_text = interpret_query(
+            user_input=user_message,
+            history=list(history),   # предаваме досегашния контекст
+            lang=lang,               # "bg" или "en"
+            data_path=os.path.join(os.path.dirname(_file_), "data", "master_table.csv"),
+        )
+
+        # обнови историята
+        history.append({"role": "user", "content": user_message})
+        history.append({"role": "assistant", "content": reply_text})
+
+        # върни резултата и cookie
+        resp = JSONResponse({"response": reply_text})
+        resp.set_cookie("sid", sid, httponly=False, samesite="Lax")
+        return resp
+
+    except Exception as e:
+        # показваме ясна грешка, за да се вижда в UI
+        return JSONResponse({"response": f"Server error: {e}"}, status_code=500)
