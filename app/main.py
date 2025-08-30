@@ -80,7 +80,7 @@ async def chat(request: Request):
             user_input=user_message,
             history=list(history),   # предаваме досегашния контекст
             lang=lang,               # "bg" или "en"
-            data_path=os.path.join(os.path.dirname(_file_), "data", "master_table.csv"),
+            data_path=os.path.join(os.path.dirname(__file__), "data", "master_table.csv"),
         )
 
         # обнови историята
