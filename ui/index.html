@@ -102,46 +102,49 @@
     </div>
   </div>
   <script>
-    async function sendMessage() {
-      const inputField = document.getElementById("userInput");
-      const userMessage = inputField.value.trim();
-      if (!userMessage) return;
+  async function sendMessage() {
+    const inputField = document.getElementById("userInput");
+    const userMessage = inputField.value.trim();
+    if (!userMessage) return;
 
-      appendMessage(userMessage, "user");
-      inputField.value = "";
+    appendMessage(userMessage, "user");
+    inputField.value = "";
 
-      try {
-        const response = await fetch("https://bait-4ahw.onrender.com/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: userMessage })
-        });
-        const data = await response.json();
-	let reply = data.response;
-        If (typeof reply === "object") {
-		reply = JSON.stringify(reply, null, 2);
-}
-        appendMessage(data.response || "No response from server", "bot");
-      } catch (error) {
-        appendMessage("Error connecting to server.", "bot");
+    try {
+      const response = await fetch("/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: userMessage })
+      });
+
+      const data = await response.json();
+
+      let reply = data.response;
+      if (typeof reply === "object") {
+        reply = JSON.stringify(reply, null, 2);
       }
-    }
 
-    function appendMessage(text, sender) {
-      const messagesDiv = document.getElementById("messages");
-      const messageEl = document.createElement("div");
-      messageEl.classList.add("message", sender);
-      messageEl.textContent = text;
-      messagesDiv.appendChild(messageEl);
-      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      appendMessage(reply || "No response from server", "bot");
+    } catch (error) {
+      appendMessage("Error connecting to server.", "bot");
     }
+  }
 
-    window.addEventListener("DOMContentLoaded", function () {
-  const input = document.getElementById("userInput");
-  input.addEventListener("keydown", function (e) {
-    if (e.key === "Enter") sendMessage();
+  function appendMessage(text, sender) {
+    const messagesDiv = document.getElementById("messages");
+    const messageEl = document.createElement("div");
+    messageEl.classList.add("message", sender);
+    messageEl.textContent = text;
+    messagesDiv.appendChild(messageEl);
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+  }
+
+  window.addEventListener("DOMContentLoaded", function () {
+    const input = document.getElementById("userInput");
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") sendMessage();
+    });
   });
-});
-  </script>
+</script>
 </body>
 </html>
