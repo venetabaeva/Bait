@@ -8,7 +8,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 
 # === Път до master таблицата (остави така) ===
-DATA_PATH = os.path.join(os.path.dirname(_file_), "data", "master_table.csv")
+DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "master_table.csv")
 
 # === Настройки за история/контекст на чата (в рамките на една сесия) ===
 MAX_TURNS = 6  # колко последни потребител/бот реплики да пазим
