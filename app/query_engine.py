@@ -1,40 +1,43 @@
+# app/query_engine.py
 import pandas as pd
 import re
+
+EVIDENCE_FIELDS = [
+    # сложи тук колоните, които са „истините“ за отговор: напр.
+    "Activity", "Stakeholder", "Expectation", "Next actions", "Risks", "Notes"
+]
 
 class BAUniversalQueryEngine:
     def __init__(self, master_table_path: str):
         self.df = pd.read_csv(master_table_path).fillna("")
-        # normalize convenience columns for robust matching
-        self.norm = self.df.copy()
-        for c in self.norm.columns:
-            if self.norm[c].dtype == object:
-                self.norm[c] = self.norm[c].astype(str).str.strip().str.lower()
+        # нормализирани имена на колони
+        self.cols = {c.lower().strip(): c for c in self.df.columns}
 
-    def get_all_factors(self):
-        # columns available in the table
-        return list(self.df.columns)
+    def _find_columns(self, text: str):
+        """опит за намиране на колони по ключови думи в user input (фъзи/синоними)."""
+        t = text.lower()
+        hits = []
+        for k, orig in self.cols.items():
+            tokens = re.split(r"[^a-z0-9]+", k)
+            if any(tok and tok in t for tok in tokens):
+                hits.append(orig)
+        return list(set(hits)) or list(self.df.columns)
 
-    def query_contains(self, **kwargs):
-        """
-        Flexible case-insensitive 'contains' matching on provided columns.
-        Example: query_contains(Activity="stakeholder conflict")
-        """
-        if not kwargs:
-            return self.df.head(0)
+    def query(self, **filters):
+        """filters идват от LLM (интерпретация). Пример: Activity='Requirements conflict'."""
+        if not filters:
+            return [], self.df.head(0)  # няма филтри → празно съвпадение
 
-        mask = None
-        for col, val in kwargs.items():
-            if col not in self.norm.columns or not isinstance(val, str):
+        result = self.df.copy()
+        for key, val in filters.items():
+            if not val:
                 continue
-            v = val.strip().lower()
-            if not v:
-                continue
-            # word-boundary-ish contains (fallback to simple contains)
-            pattern = re.escape(v)
-            colmask = self.norm[col].str.contains(pattern, na=False, regex=True)
-            mask = colmask if mask is None else (mask & colmask)
-
-        if mask is None:
-            return self.df.head(0)
-
-        return self.df[mask]
+            # позволи фъзи мач по съдържание
+            key_real = self.cols.get(key.lower(), key)
+            if key_real in result.columns:
+                v = str(val).strip().lower()
+                result = result[result[key_real].astype(str).str.lower().str.contains(re.escape(v))]
+        # намали само до полетата за доказателства
+        present_fields = [c for c in EVIDENCE_FIELDS if c in result.columns]
+        evidence = result[present_fields].copy() if present_fields else result.copy()
+        return present_fields, evidence

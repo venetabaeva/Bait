@@ -2,175 +2,133 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Bait Advisor</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>BAIT – Let’s Analyse It</title>
   <style>
-    :root{
-      --bg:#121212;
-      --panel:#2a2a2a;
-      --panel-2:#1e1e1e;
-      --text:#f1f1f1;
-      --muted:#cfcfcf;
-      --accent:#d9d9d9; /* НИКАКВО синьо */
-      --accent-2:#bdbdbd;
-      --input:#303030;  /* по-тъмна лента за чат */
+    body {
+      background: #1e1e1e;
+      color: #e9e9e9;
+      font-family: Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin: 0;
+      padding: 24px;
     }
-    *{box-sizing:border-box}
-    html,body{height:100%}
-    body{
-      margin:0;
-      background:var(--bg);
-      color:var(--text);
-      font-family:Arial, Helvetica, sans-serif;
-      display:flex;
-      align-items:flex-start;
-      justify-content:center;
-      padding:32px 16px;
-      gap:16px;
+    .logo {
+      margin-top: 12px;
     }
-    .wrap{
-      width:min(820px, 100%);
-      display:flex;
-      flex-direction:column;
-      align-items:center;
-      gap:16px;
+    .hello {
+      font-size: 22px;
+      font-weight: bold;
+      margin: 12px 0 24px 0;
+      text-align: center;
     }
-    .logo{
-      display:flex; align-items:center; justify-content:center;
-      height:56px;
+    .chat {
+      width: 100%;
+      max-width: 760px;
+      background: #2b2b2b;
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 10px 24px rgba(0,0,0,0.35);
+      display: flex;
+      flex-direction: column;
     }
-    .logo img{height:40px}
-
-    .headline{
-      margin-top:6px;
-      font-size:20px;
-      color:var(--muted);
-      text-align:center;
+    #messages {
+      flex-grow: 1;
+      overflow-y: auto;
+      margin-bottom: 12px;
     }
-
-    .chat{
-      width:100%;
-      background:var(--panel);
-      border-radius:12px;
-      padding:16px;
-      box-shadow:0 10px 30px rgba(0,0,0,.35);
-      display:flex;
-      flex-direction:column;
-      gap:12px;
-      min-height:420px;
+    .msg {
+      margin: 8px 0;
+      padding: 10px 14px;
+      border-radius: 6px;
+      line-height: 1.5;
+      word-wrap: break-word;
+      white-space: pre-wrap;
     }
-
-    .messages{
-      flex:1;
-      overflow:auto;
-      display:flex;
-      flex-direction:column;
-      gap:8px;
-      padding:6px;
-      background:var(--panel-2);
-      border-radius:10px;
+    .user {
+      background: #3a3a3a;
+      color: #f0f0f0;
+      align-self: flex-end;
     }
-
-    .msg{
-      padding:10px 12px;
-      border-radius:8px;
-      line-height:1.45;
-      font-size:15px;
-      max-width:85%;
-      white-space:pre-wrap;
+    .bot {
+      background: #424242;
+      color: #f3f3f3;
+      align-self: flex-start;
     }
-    .msg.user{
-      margin-left:auto;
-      background:var(--accent);
-      color:#111;
+    .input {
+      display: flex;
+      gap: 8px;
+      margin-top: auto;
     }
-    .msg.bot{
-      background:#3a3a3a;
-      color:var(--text);
+    .input input {
+      flex: 1;
+      background: #3a3a3a;
+      border: 1px solid #555;
+      border-radius: 8px;
+      color: #eee;
+      padding: 12px 14px;
     }
-
-    .input{
-      display:flex; gap:8px;
-      background:var(--input);
-      border-radius:10px;
-      padding:8px;
+    .input button {
+      background: #6b6b6b;
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      padding: 0 18px;
+      height: 44px;
+      cursor: pointer;
     }
-    .input input{
-      flex:1;
-      background:transparent;
-      border:none;
-      outline:none;
-      color:var(--text);
-      font-size:16px;
-      padding:10px 12px;
+    .input button:hover {
+      background: #7a7a7a;
     }
-    .input button{
-      background:var(--accent-2);
-      color:#111;
-      border:none;
-      border-radius:8px;
-      padding:10px 14px;
-      font-size:15px;
-      cursor:pointer;
-    }
-    .input button:hover{filter:brightness(.95)}
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="logo">
-      <img src="/static/bait_logo.png" alt="bait">
-    </div>
-    <div class="headline">Hello! Let’s Analyse It.</div>
+  <div class="logo">
+    <img src="/static/bait_logo.png" alt="bait" style="height:40px"/>
+  </div>
+  <div class="hello">Hello! Let’s Analyse It.</div>
 
-    <div class="chat">
-      <div id="messages" class="messages"></div>
-      <div class="input">
-        <input id="userInput" type="text" placeholder="Ask anything…">
-        <button onclick="sendMessage()">Send</button>
-      </div>
+  <div class="chat">
+    <div id="messages"></div>
+    <div class="input">
+      <input id="userInput" placeholder="Ask anything..."/>
+      <button onclick="sendMessage()">Send</button>
     </div>
   </div>
 
   <script>
-    function push(text, who){
-      const box=document.getElementById('messages');
-      const el=document.createElement('div');
-      el.className=`msg ${who}`;
-      el.textContent=text;
-      box.appendChild(el);
-      box.scrollTop=box.scrollHeight;
-    }
-
     async function sendMessage(){
-      const inp=document.getElementById('userInput');
-      const msg=inp.value.trim();
-      if(!msg) return;
-      push(msg, 'user');
-      inp.value='';
-
+      const el=document.getElementById('userInput');
+      const txt=(el.value||'').trim(); 
+      if(!txt) return;
+      append(txt,'user'); 
+      el.value='';
       try{
-        const r = await fetch('/chat', {
+        const r=await fetch('/chat',{
           method:'POST',
           headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({message:msg})
+          body:JSON.stringify({message:txt})
         });
-        const data = await r.json();
-
-        let reply = data.response;
-        // ако бекендът върне обект (краен резултат), го сведем до текст
-        if (reply && typeof reply === 'object'){
-          reply = reply.text || reply.summary || JSON.stringify(reply, null, 2);
-        }
-        push(reply || 'No response from server', 'bot');
+        const d=await r.json();
+        let reply=d.response;
+        if(typeof reply==='object'){ reply=JSON.stringify(reply,null,2); }
+        append(reply||'No response','bot');
       }catch(e){
-        push('Error connecting to server.', 'bot');
+        append('Error connecting to server.','bot');
       }
     }
-
-    window.addEventListener('DOMContentLoaded', ()=>{
-      const i=document.getElementById('userInput');
-      i.addEventListener('keydown', e=>{ if(e.key==='Enter') sendMessage(); });
+    function append(text,who){
+      const m=document.getElementById('messages'); 
+      const d=document.createElement('div'); 
+      d.className='msg '+(who==='user'?'user':'bot'); 
+      d.textContent=text; 
+      m.appendChild(d); 
+      m.scrollTop=m.scrollHeight; 
+    }
+    document.getElementById('userInput').addEventListener('keydown',e=>{
+      if(e.key==='Enter') sendMessage();
     });
   </script>
 </body>

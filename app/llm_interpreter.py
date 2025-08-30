@@ -1,149 +1,74 @@
-import os, json, hashlib
+# app/llm_interpreter.py
+import os, json
 from openai import OpenAI
-from dotenv import load_dotenv
 from .query_engine import BAUniversalQueryEngine
 
-load_dotenv()
-
 DATA_PATH = os.path.join(os.path.dirname(_file_), "data", "master_table.csv")
-QE = BAUniversalQueryEngine(DATA_PATH)
+engine = BAUniversalQueryEngine(DATA_PATH)
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-def _hash(path):
-    import hashlib
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        h.update(f.read())
-    return h.hexdigest()[:12]
+INTERPRET_SYS = """You are a careful information extractor.
+You receive a user request and a list of real column names from a master table.
+Your job: map the user request to a small JSON of filters ONLY using the provided columns.
+- Use exact column names from the list.
+- If unsure, return {}.
+Return ONLY valid JSON, no prose.
+"""
 
-DATASET_VERSION = _hash(DATA_PATH)
+ANSWER_SYS = """You are BAIT—an experienced Business Analyst.
+Write a concise human answer based ONLY on the provided EVIDENCE rows (csv slices).
+Guardrails:
+- Do NOT invent facts not present in EVIDENCE.
+- Synthesize and structure as guidance (short paragraphs + bullet 'Next actions' if present).
+- If EVIDENCE is empty, ask for one clarifying question, no hallucinations.
+Also return a short 'evidence' list (e.g., row indices or brief refs) to prove grounding.
+Output JSON:
+{"answer": "...", "evidence_refs": ["...","..."]}
+"""
 
-def _client():
-    return OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+def _chat(model, sys, user_msg, **params):
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[{"role":"system","content":sys},{"role":"user","content":user_msg}],
+        temperature=0.2,
+        **params
+    )
+    return resp.choices[0].message.content.strip()
 
-def interpret_query(user_input: str) -> dict:
-    """
-    Strictly grounded: we only answer from table rows.
-    Steps: detect Activity -> fetch rows -> compose template -> optional LLM rephrase (no new facts).
-    """
-    # 1) detect Activity text via LLM (minimal use)
-    factors = {}
+def interpret_query(user_input: str):
+    # A) извлечи филтри
+    cols = engine.df.columns.tolist()
+    interpret_user = f"User request: {user_input}\nColumns: {json.dumps(cols)}\nReturn JSON of filters."
+    raw = _chat("gpt-4o-mini", INTERPRET_SYS, interpret_user, max_tokens=300)
+
     try:
-        sys = (
-            "Extract a short 'Activity' phrase from the user's message. "
-            "Return JSON like {\"Activity\": \"...\"}. No other fields."
-        )
-        r = _client().chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role":"system","content":sys},
-                      {"role":"user","content":user_input}],
-            temperature=0,
-            max_tokens=60
-        )
-        raw = r.choices[0].message.content.strip()
-        try:
-            factors = json.loads(raw)
-            if not isinstance(factors, dict):
-                factors = {}
-        except json.JSONDecodeError:
-            factors = {}
-    except Exception as e:
-        return {"answer": f"LLM error: {e}", "factors": {}, "matched_count": 0,
-                "matched_preview": [], "dataset_version": DATASET_VERSION}
-
-    activity = (factors.get("Activity") or "").strip()
-    # 2) query table (robust contains on Activity)
-    try:
-        rows = QE.query_contains(Activity=activity) if activity else QE.df.head(0)
-    except Exception as e:
-        return {"answer": f"Query error: {e}", "factors": {"Activity": activity},
-                "matched_count": 0, "matched_preview": [], "dataset_version": DATASET_VERSION}
-
-    matched_count = len(rows)
-    preview = rows.head(5).to_dict(orient="records")
-
-    if matched_count == 0:
-        return {
-            "answer": (
-                "I couldn’t find a direct rule for this activity in the master table. "
-                "Please try a more specific phrasing for the activity that appears in the table."
-            ),
-            "factors": {"Activity": activity},
-            "matched_count": 0,
-            "matched_preview": [],
-            "dataset_version": DATASET_VERSION
-        }
-
-    # 3) deterministic template from columns
-    # Try common column names; degrade gracefully if some are missing
-    cols = [c.lower() for c in QE.df.columns]
-    def pick(*names):
-        for n in names:
-            for c in QE.df.columns:
-                if c.lower() == n.lower():
-                    return c
-        return None
-
-    c_activity    = pick("Activity")
-    c_stakeholder = pick("Stakeholder","Stakeholders","Role")
-    c_expectation = pick("Expectation","Expected from stakeholder","Expectations")
-    c_next        = pick("Next actions","Next steps","Actions")
-
-    # build bullet facts
-    stakeholders = []
-    exp_lines = []
-    next_lines = []
-
-    for _, rrow in rows.iterrows():
-        if c_stakeholder and str(rrow.get(c_stakeholder,"")).strip():
-            stakeholders.append(str(rrow[c_stakeholder]).strip())
-        if c_stakeholder and c_expectation:
-            s = str(rrow.get(c_stakeholder,"")).strip()
-            e = str(rrow.get(c_expectation,"")).strip()
-            if s or e:
-                exp_lines.append(f"- {s}: {e}".strip(": "))
-        if c_next and str(rrow.get(c_next,"")).strip():
-            nxt = str(rrow[c_next]).strip()
-            next_lines.append(f"- {nxt}")
-
-    stakeholders = sorted(set([s for s in stakeholders if s]))
-    exp_lines    = [x for x in exp_lines if x]
-    next_lines   = [x for x in next_lines if x]
-
-    template_answer = []
-    if c_activity and activity:
-        template_answer.append(f"Activity: {activity}")
-    if stakeholders:
-        template_answer.append("Stakeholders involved:")
-        template_answer.extend(exp_lines if exp_lines else [f"- {s}" for s in stakeholders])
-    if next_lines:
-        template_answer.append("Next actions:")
-        template_answer.extend(next_lines)
-
-    plain = "\n".join(template_answer).strip()
-
-    # 4) optional rephrase: make it human, but DO NOT add facts
-    final_text = plain
-    try:
-        prompt = (
-            "Rewrite the following bullets into a concise human advisory answer. "
-            "Do NOT add any new facts or stakeholders. Only rephrase what is present.\n\n"
-            f"{plain}"
-        )
-        r2 = _client().chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role":"system","content":"You must not introduce information not present in user content."},
-                      {"role":"user","content":prompt}],
-            temperature=0,
-            max_tokens=350
-        )
-        final_text = r2.choices[0].message.content.strip() or plain
+        filters = json.loads(raw)
+        if not isinstance(filters, dict):
+            filters = {}
     except Exception:
-        pass
+        filters = {}
 
-    return {
-        "answer": final_text,
-        "factors": {"Activity": activity},
-        "matched_count": matched_count,
-        "matched_preview": preview[:3],
-        "dataset_version": DATASET_VERSION
-    }
+    # B) извлечи доказателства от таблицата
+    _, evidence_df = engine.query(**filters)
+
+    # C) отговор на човек, но само от evidence
+    if evidence_df.empty:
+        evidence_snippet = "[]"
+    else:
+        # малък срез от редовете като текст за LLM
+        evidence_snippet = evidence_df.to_csv(index=False)
+
+    answer_user = f"EVIDENCE (csv):\n{evidence_snippet}\n\nUser request: {user_input}\n"
+    raw_answer = _chat("gpt-4o-mini", ANSWER_SYS, answer_user, max_tokens=800)
+
+    # върни чист текст към фронта; пазим и JSON за евентуален dev режим
+    try:
+        obj = json.loads(raw_answer)
+        answer = obj.get("answer", "").strip() or raw_answer
+        evidence_refs = obj.get("evidence_refs", [])
+    except Exception:
+        answer = raw_answer
+        evidence_refs = []
+
+    # dev hint – може да логнеш evidence_refs
+    return answer
